@@ -1,0 +1,30 @@
+[package]
+name = "sift"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bytemuck = "1.16.0"
+cfg-if = "1.0.0"
+env_logger = "0.11.3"
+image = "0.25.1"
+lazy_static = "1.4.0"
+log = "0.4.21"
+pollster = "0.3.0"
+rayon = "1.10.0"
+wgpu = "0.20.0"
+winit = "0.30.0"
+
+[dev-dependencies]
+divan = "0.1.14"
+
+[[bench]]
+name = "sift"
+harness = false
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1.6"
+console_log = "1.0"
+wgpu = { version = "0.19", features = ["webgl"]}
