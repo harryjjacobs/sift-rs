@@ -3,6 +3,7 @@ use divan::Bencher;
 use sift::{
     gaussian_blur::{GaussianBlurCpu, GaussianBlurGpu},
     sift_image::Image,
+    SiftCpu, SiftGpu,
 };
 
 fn main() {
@@ -21,7 +22,7 @@ fn image_from_bytes(bytes: &[u8]) -> Image {
 
 fn setup_wgpu() -> (wgpu::Device, wgpu::Queue) {
     // make wgpu logging visible
-    env_logger::init();
+    let _ = env_logger::try_init();
 
     // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -71,5 +72,35 @@ fn benchmark_gaussian_blur_gpu(bencher: Bencher) {
 
     bencher.bench_local(move || {
         blur.apply(&mut image);
+    });
+}
+
+#[divan::bench()]
+fn benchmark_sift_cpu_sized(bencher: Bencher) {
+    let img_bytes = include_bytes!("../test_data/harbourside.png");
+    let image = image::load_from_memory(img_bytes).unwrap();
+
+    let mut sift = SiftCpu::new_fixed_size(image.width() as usize, image.height() as usize);
+    bencher.bench_local(move || {
+        sift.run(&image);
+    });
+}
+
+#[divan::bench()]
+fn benchmark_sift_gpu(bencher: Bencher) {
+    let img_bytes = include_bytes!("../test_data/harbourside.png");
+    let image = image::load_from_memory(img_bytes).unwrap();
+
+    let (device, queue) = setup_wgpu();
+
+    let mut sift = SiftGpu::new(
+        &device,
+        &queue,
+        image.width() as usize,
+        image.height() as usize,
+    );
+
+    bencher.bench_local(move || {
+        sift.run(&image);
     });
 }

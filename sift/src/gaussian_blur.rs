@@ -1,3 +1,5 @@
+use core::panic;
+
 use crate::sift_image::Image;
 use lazy_static::lazy_static;
 use wgpu::{util::DeviceExt, BufferBinding};
@@ -24,7 +26,7 @@ pub struct GaussianKernelCpu {
 
 impl GaussianKernelCpu {
     pub fn new(stdev: f64) -> GaussianKernelCpu {
-        let radius = (3.0 * stdev).ceil() as i32;
+        let radius = Self::radius(stdev) as i32;
         let mut data = Vec::new();
         for i in -radius..=radius {
             data.push(gaussian_distribution_f64(stdev, 0.0, i as f64));
@@ -34,6 +36,10 @@ impl GaussianKernelCpu {
             data[i] /= sum;
         }
         return GaussianKernelCpu { data, radius };
+    }
+
+    pub fn radius(stdev: f64) -> u32 {
+        return (3.0 * stdev).ceil() as u32;
     }
 }
 
@@ -51,6 +57,15 @@ impl GaussianBlurCpu {
     pub fn apply(&self, image: &mut Image) {
         let kernel_radius = self.kernel.radius;
         let kernel = &self.kernel.data;
+
+        if kernel.len() as usize >= image.width || kernel.len() as usize >= image.height {
+            panic!("Kernel size is bigger than the image. Image width: {}, height: {}. Kernel size: {}", 
+                image.width,
+                image.height,
+                kernel.len(),
+            );
+        }
+
         let width = image.width;
         let height = image.height;
         let original_image = image.clone();
@@ -71,7 +86,7 @@ impl GaussianBlurCpu {
                     let pixel_value = pixel as f64;
                     sum += pixel_value * kernel[i as usize];
                 }
-                *image.at_mut(x as usize, y as usize) = sum as u8;
+                *image.at_mut(x as usize, y as usize) = sum as i16;
             }
         }
         let original_image = image.clone();
@@ -92,7 +107,7 @@ impl GaussianBlurCpu {
                     let pixel_value = pixel as f64;
                     sum += pixel_value * kernel[i as usize];
                 }
-                *image.at_mut(x as usize, y as usize) = sum as u8;
+                *image.at_mut(x as usize, y as usize) = sum as i16;
             }
         }
     }
@@ -105,7 +120,7 @@ pub struct GaussianKernelGpu {
 
 impl GaussianKernelGpu {
     pub fn new(stdev: f32) -> GaussianKernelGpu {
-        let radius = (3.0 * stdev).ceil() as i32;
+        let radius = Self::radius(stdev);
         let mut data = Vec::new();
         for i in -radius..=radius {
             data.push(gaussian_distribution_f32(stdev, 0.0, i as f32));
@@ -116,10 +131,13 @@ impl GaussianKernelGpu {
         }
         return GaussianKernelGpu { data, radius };
     }
+
+    pub fn radius(stdev: f32) -> i32 {
+        return (3.0 * stdev).ceil() as i32;
+    }
 }
 
 pub struct GaussianBlurGpu<'a> {
-    kernel: GaussianKernelGpu,
     device: &'a wgpu::Device,
     queue: &'a wgpu::Queue,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -211,7 +229,6 @@ impl<'a> GaussianBlurGpu<'a> {
         });
 
         GaussianBlurGpu::<'a> {
-            kernel,
             device,
             queue,
             bind_group_layout,
@@ -221,8 +238,11 @@ impl<'a> GaussianBlurGpu<'a> {
     }
 
     pub fn apply(&mut self, image: &mut Image) {
-        self.shader_pass_convolve_and_tranpose_1d(&mut image.data, image.width, image.height);
-        self.shader_pass_convolve_and_tranpose_1d(&mut image.data, image.height, image.width);
+        // TODO: optimise this by removing the need to copy the data to a Vec<u8> and back
+        let mut unsigned_data: Vec<u8> = image.data.iter().map(|x| *x as u8).collect();
+        self.shader_pass_convolve_and_tranpose_1d(&mut unsigned_data, image.width, image.height);
+        self.shader_pass_convolve_and_tranpose_1d(&mut unsigned_data, image.height, image.width);
+        image.data = unsigned_data.iter().map(|x| *x as i16).collect();
     }
 
     /// This function applies a 1D gaussian blur along each row of the image data using a compute shader.
@@ -239,8 +259,6 @@ impl<'a> GaussianBlurGpu<'a> {
         width: usize,
         height: usize,
     ) {
-        // println!("kernel: {:?}", self.kernel.data);
-
         let mut image_data_padded: Vec<u8>;
         let image_data_slice: &[u8];
 
@@ -249,7 +267,7 @@ impl<'a> GaussianBlurGpu<'a> {
         let remainder = data.len() % ALIGNMENT;
         if remainder != 0 {
             image_data_padded = data.clone();
-            let padding = ALIGNMENT - (data.len() % ALIGNMENT);
+            let padding = ALIGNMENT - remainder;
             image_data_padded.extend(vec![0; padding]);
             image_data_slice = image_data_padded.as_slice();
         } else {
@@ -342,7 +360,7 @@ impl<'a> GaussianBlurGpu<'a> {
 
             compute_pass.set_pipeline(&self.compute_pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
-            compute_pass.dispatch_workgroups(1, height as u32, 1);
+            compute_pass.dispatch_workgroups(width as u32, height as u32, 1);
         }
 
         // copy result to read-back buffer
