@@ -2,7 +2,6 @@ use core::panic;
 
 use crate::sift_image::Image;
 use lazy_static::lazy_static;
-use wgpu::{util::DeviceExt, BufferBinding};
 
 lazy_static! {
     static ref SQRT2PI_F64: f64 = (2.0 * std::f64::consts::PI).sqrt();
