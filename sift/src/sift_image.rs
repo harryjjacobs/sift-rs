@@ -4,13 +4,22 @@ use image::GrayImage;
 
 #[derive(Clone)]
 pub struct Image {
-    pub data: Vec<i16>,
+    pub data: Vec<f64>,
     pub width: usize,
     pub height: usize,
 }
 
 impl Image {
-    pub fn from_raw(data: Vec<i16>, width: usize, height: usize) -> Image {
+    /// New image of specified size with all data initialised to 0
+    pub fn new_zero(width: usize, height: usize) -> Image {
+        Image {
+            data: vec![0.0; width * height],
+            width,
+            height,
+        }
+    }
+
+    pub fn from_raw(data: Vec<f64>, width: usize, height: usize) -> Image {
         Image {
             data,
             width,
@@ -18,11 +27,11 @@ impl Image {
         }
     }
 
-    pub fn at(&self, x: usize, y: usize) -> i16 {
+    pub fn at(&self, x: usize, y: usize) -> f64 {
         return self.data[x + self.width * y];
     }
 
-    pub fn at_mut(&mut self, x: usize, y: usize) -> &mut i16 {
+    pub fn at_mut(&mut self, x: usize, y: usize) -> &mut f64 {
         return &mut self.data[x + self.width * y];
     }
 
@@ -30,7 +39,10 @@ impl Image {
         let image = GrayImage::from_raw(
             self.width as u32,
             self.height as u32,
-            self.data.iter().map(|x| (*x).clamp(0, 255) as u8).collect(),
+            self.data
+                .iter()
+                .map(|x| (*x as i16).clamp(0, 255) as u8)
+                .collect(),
         )
         .unwrap();
         let _ = image.save(path);
@@ -43,7 +55,7 @@ fn sub_assign(lhs: &mut Image, rhs: &Image) {
     }
     let size = lhs.width * lhs.height;
     for i in 0..size {
-        lhs.data[i] = rhs.data[i].saturating_sub(lhs.data[i]);
+        lhs.data[i] = rhs.data[i] - lhs.data[i];
     }
 }
 
