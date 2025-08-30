@@ -2,7 +2,7 @@ pub mod downsample_x2;
 pub mod gaussian_blur;
 pub mod sift_image;
 
-use gaussian_blur::{GaussianBlurGpu, GaussianKernelCpu, GaussianKernelGpu};
+use gaussian_blur::GaussianKernelCpu;
 use image::DynamicImage;
 use lazy_static::lazy_static;
 use std::f64::consts::PI;
@@ -817,167 +817,13 @@ impl SiftCpu {
     }
 }
 
-pub struct SiftGpu<'a> {
-    device: &'a wgpu::Device,
-    queue: &'a wgpu::Queue,
-    octaves: usize,
-    blurs: Vec<Vec<Box<GaussianBlurGpu<'a>>>>,
-}
-
-impl<'a> SiftGpu<'a> {
-    /// This is the implementation of the SIFT algorithm where as much as possible is done on the GPU
-    /// Knowing the image size in advance gives a performance boost
-    pub fn new(
-        device: &'a wgpu::Device,
-        queue: &'a wgpu::Queue,
-        image_width: usize,
-        image_height: usize,
-    ) -> SiftGpu<'a> {
-        let octaves = SiftGpu::calc_num_octaves(image_width, image_height);
-        let blurs = SiftGpu::init_gaussian_blur_pyramid_gpu(&device, &queue, octaves);
-        SiftGpu {
-            device,
-            queue,
-            octaves,
-            blurs,
-        }
-    }
-
-    pub fn run(&mut self, image: &DynamicImage) {
-        let width = image.width() as usize;
-        let height = image.height() as usize;
-        let raw_grayscale_image = image
-            .grayscale()
-            .into_luma8()
-            .iter()
-            .map(|x| *x as f64)
-            .collect();
-        let image = Image::from_raw(raw_grayscale_image, width, height);
-
-        self.compute_scale_space_gpu(&image);
-    }
-
-    /// Calculate the number of octaves we will be able to
-    /// use based on the size of the image
-    fn calc_num_octaves(width: usize, height: usize) -> usize {
-        let mut image_size = std::cmp::min(width, height) / 2;
-        let mut radius = 0;
-        let mut octave = 1;
-        while radius < image_size {
-            let stdev = octave as f64 * SIGMA * K.powi((N_G - 1) as i32);
-            radius = GaussianKernelGpu::radius(stdev as f32) as usize;
-            octave += 1;
-            image_size /= 2;
-        }
-
-        return octave - 1;
-    }
-
-    /// Instantiate the gaussian blur operations that will be needed to build the pyramid.
-    /// We do this separately so we have the option of generating the kernels ahead of time
-    /// if we know the image dimensions.
-    fn init_gaussian_blur_pyramid_gpu(
-        device: &'a wgpu::Device,
-        queue: &'a wgpu::Queue,
-        octaves: usize,
-    ) -> Vec<Vec<Box<GaussianBlurGpu<'a>>>> {
-        let mut blurs: Vec<Vec<Box<GaussianBlurGpu>>> = vec![];
-        for i in 0..octaves {
-            blurs.push(vec![]);
-            let base_sigma = (i + 1) as f64 * SIGMA; // scale the base std dev for each octave
-            for j in 0..N_G {
-                let sigma = K.powi(j.try_into().unwrap()) * base_sigma;
-                blurs[i].push(Box::new(GaussianBlurGpu::new(
-                    &device,
-                    &queue,
-                    sigma as f32,
-                )));
-            }
-        }
-        return blurs;
-    }
-
-    /// Compute the Gaussian scale-space representation of an image
-    /// Assumes image is grayscale
-    fn compute_scale_space_gpu(&mut self, image: &Image) {
-        let mut gaussians_pyramid: Vec<Vec<Image>> = vec![];
-        gaussians_pyramid.reserve_exact(self.octaves);
-
-        // generate octaves
-        let mut scaled = image.clone();
-        for i in 0..self.octaves {
-            gaussians_pyramid.push(vec![]);
-            gaussians_pyramid[i].reserve_exact(N_G);
-            for j in 0..N_G {
-                self.blurs[i][j].apply(&mut scaled);
-                gaussians_pyramid[i].push(scaled.clone());
-            }
-            scaled.downsample_x2();
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
     use image::DynamicImage;
 
-    use crate::{gaussian_blur::GaussianBlurGpu, sift_image::Image};
-
-    pub fn blur_gpu(image: DynamicImage) {
-        let width = image.width() as usize;
-        let height = image.height() as usize;
-        let raw_grayscale_image = image
-            .grayscale()
-            .into_luma8()
-            .iter()
-            .map(|x| *x as f64)
-            .collect();
-        let mut image = Image::from_raw(raw_grayscale_image, width, height);
-
-        // make wgpu logging visible
-        env_logger::init();
-
-        // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            #[cfg(not(target_arch = "wasm32"))]
-            backends: wgpu::Backends::PRIMARY,
-            #[cfg(target_arch = "wasm32")]
-            backends: wgpu::Backends::VULKAN,
-            ..Default::default()
-        });
-
-        // Handle to the graphics card
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        }))
-        .unwrap();
-
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: None,
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(),
-            },
-            None, // Trace path
-        ))
-        .unwrap();
-
-        let mut blur = GaussianBlurGpu::new(&device, &queue, 1.6);
-        blur.apply(&mut image);
-
-        image.save_grayscale(Path::new("tmp_gpu.png"));
-    }
-
-    #[test]
-    fn test_blur_gpu() {
-        let img_bytes = include_bytes!("../test_data/harbourside.png");
-        let img = image::load_from_memory(img_bytes).unwrap();
-        blur_gpu(img);
-    }
+    use crate::sift_image::Image;
 
     #[test]
     fn test_interpolate_hist_bin() {

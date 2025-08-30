@@ -1,12 +1,3 @@
-# WebGpu Experiments
+# Rust implementation of the SIFT algorithm
 
-## Requirements
-
-Download and install the `wasm-pack` tool from the following link:
-https://rustwasm.github.io/wasm-pack/installer/
-
-## Build
-
-```bash
-wasm-pack build
-```
+A simple implementation of the SIFT algorithm in Rust optionally utilizing wgpu for GPU acceleration.
